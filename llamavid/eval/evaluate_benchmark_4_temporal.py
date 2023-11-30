@@ -13,8 +13,7 @@ def parse_args():
     parser.add_argument("--output_json", required=True, help="The path to save annotation final combined json file.")
     parser.add_argument("--num_tasks", required=True, type=int, help="Number of splits.")
     parser.add_argument("--num_chunks", default=1, type=int, help="Result splits")
-    args = parser.parse_args()
-    return args
+    return parser.parse_args()
 
 
 def annotate(prediction_set, caption_files, output_dir):
@@ -86,7 +85,7 @@ def main():
         for _idx in range(args.num_chunks):
             file = os.path.join(args.pred_path, f"{args.num_chunks}_{_idx}.json")
             pred_contents += [json.loads(line) for line in open(file)]
-        
+
     else:
         pred_contents = [json.loads(line) for line in open(args.pred_path)]
 
@@ -143,7 +142,7 @@ def main():
             print(f"incomplete_files: {len(incomplete_files)}")
 
             # Break the loop when there are no incomplete files
-            if len(incomplete_files) == 0:
+            if not incomplete_files:
                 break
             if len(incomplete_files) <= num_tasks:
                 num_tasks = 1
@@ -181,7 +180,7 @@ def main():
     # Calculate average score
     score_sum = 0
     count = 0
-    for key, result in combined_contents.items():
+    for result in combined_contents.values():
         count += 1
         score_match = result[0]['score']
         score = int(score_match)

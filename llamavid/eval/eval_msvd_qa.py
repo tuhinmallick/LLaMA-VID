@@ -14,8 +14,7 @@ def parse_args():
     parser.add_argument("--output_json", required=True, help="The path to save annotation final combined json file.")
     parser.add_argument("--num_tasks", required=True, type=int, help="Number of splits.")
     parser.add_argument("--num_chunks", default=1, type=int, help="Result splits")
-    args = parser.parse_args()
-    return args
+    return parser.parse_args()
 
 
 def annotate(prediction_set, caption_files, output_dir):
@@ -145,7 +144,7 @@ def main():
             print(f"incomplete_files: {len(incomplete_files)}")
 
             # Break the loop when there are no incomplete files
-            if len(incomplete_files) == 0:
+            if not incomplete_files:
                 break
             if len(incomplete_files) <= num_tasks:
                 num_tasks = 1
@@ -184,8 +183,8 @@ def main():
     count = 0
     yes_count = 0
     no_count = 0
-        
-    for key, result in combined_contents.items():
+
+    for result in combined_contents.values():
         # Computing score
         count += 1
         score_match = result[0]['score']
@@ -197,7 +196,7 @@ def main():
             pred = result[0]['pred']
         except:
             pred = result[0]['predicted']
-        
+
         if "yes" in pred.lower():
             yes_count += 1
         elif "no" in pred.lower():

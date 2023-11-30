@@ -49,9 +49,8 @@ def load_video(video_path):
     vr = VideoReader(video_path, ctx=cpu(0))
     total_frame_num = len(vr)
     fps = round(vr.get_avg_fps())
-    frame_idx = [i for i in range(0, len(vr), fps)]
-    spare_frames = vr.get_batch(frame_idx).asnumpy()
-    return spare_frames
+    frame_idx = list(range(0, len(vr), fps))
+    return vr.get_batch(frame_idx).asnumpy()
 
 
 def run_inference(args):
@@ -81,74 +80,71 @@ def run_inference(args):
     else:
         output_name = args.output_name
     answers_file = os.path.join(args.output_dir, f"{output_name}.json")
-    ans_file = open(answers_file, "w")
+    with open(answers_file, "w") as ans_file:
+        for sample in tqdm(gt_questions):
+            video_name = sample['video_name']
+            print(sample.keys(), '---')
+            question = sample['Q']
+            sample_set = sample
 
-    for sample in tqdm(gt_questions):
-        video_name = sample['video_name']
-        print(sample.keys(), '---')
-        question = sample['Q']
-        sample_set = sample
+            # Load the video file
+            for fmt in video_formats:  # Added this line
+                temp_path = os.path.join(args.video_dir, f"{video_name}{fmt}")
+                if os.path.exists(temp_path):
+                    video_path = temp_path
+                    break
 
-        # Load the video file
-        for fmt in video_formats:  # Added this line
-            temp_path = os.path.join(args.video_dir, f"{video_name}{fmt}")
-            if os.path.exists(temp_path):
-                video_path = temp_path
-                break
+            # Check if the video exists
+            if os.path.exists(video_path):
+                video = load_video(video_path)
+                video = image_processor.preprocess(video, return_tensors='pt')['pixel_values'].half().cuda()
+                video = [video]
 
-        # Check if the video exists
-        if os.path.exists(video_path):
-            video = load_video(video_path)
-            video = image_processor.preprocess(video, return_tensors='pt')['pixel_values'].half().cuda()
-            video = [video]
+            # try:
+                # Run inference on the video and add the output to the list
 
-        # try:
-            # Run inference on the video and add the output to the list
-            
-        qs = question
-        if model.config.mm_use_im_start_end:
-            qs = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + '\n' + qs
-        else:
-            qs = DEFAULT_IMAGE_TOKEN + '\n' + qs
+            qs = question
+            if model.config.mm_use_im_start_end:
+                qs = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + '\n' + qs
+            else:
+                qs = DEFAULT_IMAGE_TOKEN + '\n' + qs
 
-        conv = conv_templates[args.conv_mode].copy()
-        conv.append_message(conv.roles[0], qs)
-        conv.append_message(conv.roles[1], None)
-        prompt = conv.get_prompt()
+            conv = conv_templates[args.conv_mode].copy()
+            conv.append_message(conv.roles[0], qs)
+            conv.append_message(conv.roles[1], None)
+            prompt = conv.get_prompt()
 
-        input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).cuda()
+            input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).cuda()
 
-        stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
-        keywords = [stop_str]
-        stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
+            stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
+            keywords = [stop_str]
+            stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
 
-        cur_prompt = question
-        with torch.inference_mode():
-            model.update_prompt([[cur_prompt]])
-            output_ids = model.generate(
-                input_ids,
-                images=video,
-                do_sample=True,
-                temperature=0.2,
-                max_new_tokens=1024,
-                use_cache=True,
-                stopping_criteria=[stopping_criteria])
+            cur_prompt = question
+            with torch.inference_mode():
+                model.update_prompt([[cur_prompt]])
+                output_ids = model.generate(
+                    input_ids,
+                    images=video,
+                    do_sample=True,
+                    temperature=0.2,
+                    max_new_tokens=1024,
+                    use_cache=True,
+                    stopping_criteria=[stopping_criteria])
 
-        input_token_len = input_ids.shape[1]
-        n_diff_input_output = (input_ids != output_ids[:, :input_token_len]).sum().item()
-        if n_diff_input_output > 0:
-            print(f'[Warning] {n_diff_input_output} output_ids are not the same as the input_ids')
-        outputs = tokenizer.batch_decode(output_ids[:, input_token_len:], skip_special_tokens=True)[0]
-        outputs = outputs.strip()
-        if outputs.endswith(stop_str):
-            outputs = outputs[:-len(stop_str)]
-        outputs = outputs.strip()
+            input_token_len = input_ids.shape[1]
+            n_diff_input_output = (input_ids != output_ids[:, :input_token_len]).sum().item()
+            if n_diff_input_output > 0:
+                print(f'[Warning] {n_diff_input_output} output_ids are not the same as the input_ids')
+            outputs = tokenizer.batch_decode(output_ids[:, input_token_len:], skip_special_tokens=True)[0]
+            outputs = outputs.strip()
+            if outputs.endswith(stop_str):
+                outputs = outputs[:-len(stop_str)]
+            outputs = outputs.strip()
 
-        sample_set['pred'] = outputs
-        ans_file.write(json.dumps(sample_set) + "\n")
-        ans_file.flush()
-
-    ans_file.close()
+            sample_set['pred'] = outputs
+            ans_file.write(json.dumps(sample_set) + "\n")
+            ans_file.flush()
 
 
 if __name__ == "__main__":

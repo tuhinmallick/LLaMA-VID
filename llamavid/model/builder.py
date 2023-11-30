@@ -41,7 +41,11 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
 
     if 'vid' in model_name.lower():
         # Load LLaMA-VID model
-        if model_base is not None:
+        if model_base is None:
+            tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
+            model = LlavaLlamaAttForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, **kwargs)
+
+        else:
             # this may be mm projector only
             print('Loading LLaVA from base model...')
             tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
@@ -51,31 +55,25 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
             mm_projector_weights = torch.load(os.path.join(model_path, 'mm_projector.bin'), map_location='cpu')
             mm_projector_weights = {k: v.to(torch.float16) for k, v in mm_projector_weights.items()}
             model.load_state_dict(mm_projector_weights, strict=False)
+    elif model_base is not None:
+        # PEFT model
+        from peft import PeftModel
+        tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
+        model = AutoModelForCausalLM.from_pretrained(model_base, torch_dtype=torch.float16, low_cpu_mem_usage=True, device_map="auto")
+        print(f"Loading LoRA weights from {model_path}")
+        model = PeftModel.from_pretrained(model, model_path)
+        print("Merging weights")
+        model = model.merge_and_unload()
+        print('Convert to FP16...')
+        model.to(torch.float16)
+    else:
+        use_fast = False
+        if 'mpt' in model_name.lower():
+            tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=True)
+            model = AutoModelForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, trust_remote_code=True, **kwargs)
         else:
             tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
-            model = LlavaLlamaAttForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, **kwargs)
-
-    else:
-        # Load language model
-        if model_base is not None:
-            # PEFT model
-            from peft import PeftModel
-            tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
-            model = AutoModelForCausalLM.from_pretrained(model_base, torch_dtype=torch.float16, low_cpu_mem_usage=True, device_map="auto")
-            print(f"Loading LoRA weights from {model_path}")
-            model = PeftModel.from_pretrained(model, model_path)
-            print(f"Merging weights")
-            model = model.merge_and_unload()
-            print('Convert to FP16...')
-            model.to(torch.float16)
-        else:
-            use_fast = False
-            if 'mpt' in model_name.lower():
-                tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=True)
-                model = AutoModelForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, trust_remote_code=True, **kwargs)
-            else:
-                tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
-                model = AutoModelForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, **kwargs)
+            model = AutoModelForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, **kwargs)
 
     image_processor = None
 

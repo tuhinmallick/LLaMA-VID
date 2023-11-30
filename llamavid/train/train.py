@@ -206,13 +206,13 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer,
 
         current_folder = output_dir.split('/')[-1]
         parent_folder = os.path.dirname(output_dir)
-        if trainer.args.local_rank == 0 or trainer.args.local_rank == -1:
+        if trainer.args.local_rank in [0, -1]:
             if current_folder.startswith('checkpoint-'):
                 mm_projector_folder = os.path.join(parent_folder, "mm_projector")
                 os.makedirs(mm_projector_folder, exist_ok=True)
                 torch.save(weight_to_save, os.path.join(mm_projector_folder, f'{current_folder}.bin'))
             else:
-                torch.save(weight_to_save, os.path.join(output_dir, f'mm_projector.bin'))
+                torch.save(weight_to_save, os.path.join(output_dir, 'mm_projector.bin'))
         return
 
     if trainer.deepspeed:
@@ -329,7 +329,10 @@ def preprocess_multimodal(
                 sentence['value'] = DEFAULT_IMAGE_TOKEN + '\n' + sentence['value']
                 sentence['value'] = sentence['value'].strip()
                 if "mmtag" in conversation_lib.default_conversation.version:
-                    sentence['value'] = sentence['value'].replace(DEFAULT_IMAGE_TOKEN, '<Image>' + DEFAULT_IMAGE_TOKEN + '</Image>')
+                    sentence['value'] = sentence['value'].replace(
+                        DEFAULT_IMAGE_TOKEN,
+                        f'<Image>{DEFAULT_IMAGE_TOKEN}</Image>',
+                    )
             replace_token = DEFAULT_IMAGE_TOKEN
             if data_args.mm_use_im_start_end:
                 replace_token = DEFAULT_IM_START_TOKEN + replace_token + DEFAULT_IM_END_TOKEN
@@ -645,8 +648,10 @@ def preprocess_mpt(
 
         rounds = conversation.split(conv.sep)
         re_rounds = [conv.sep.join(rounds[:3])] # system + user + gpt
-        for conv_idx in range(3, len(rounds), 2):
-            re_rounds.append(conv.sep.join(rounds[conv_idx:conv_idx+2]))    # user + gpt
+        re_rounds.extend(
+            conv.sep.join(rounds[conv_idx : conv_idx + 2])
+            for conv_idx in range(3, len(rounds), 2)
+        )
         cur_len = 0
         target[:cur_len] = IGNORE_INDEX
         for i, rou in enumerate(re_rounds):
@@ -815,7 +820,7 @@ class LazySupervisedDataset(Dataset):
         attempt, max_attempt = 0, 10
         while attempt < max_attempt:
             try:
-                sources = self.list_data_dict[i]  
+                sources = self.list_data_dict[i]
                 if isinstance(i, int):
                     sources = [sources]
                 assert len(sources) == 1, "Don't know why it is wrapped to a list"  # FIXME
@@ -823,7 +828,7 @@ class LazySupervisedDataset(Dataset):
                     image_file = self.list_data_dict[i]['image']
                     image_folder = self.data_args.image_folder
                     processor = self.data_args.image_processor
-                    
+
                     # convert image type for OCR VQA dataset
                     if image_file is not None:
                         if 'ocr' in image_file:
@@ -834,7 +839,7 @@ class LazySupervisedDataset(Dataset):
                         elif 'VG_100K' in image_file:
                             image_file = image_file.replace('VG_100K_2', 'images')
                             image_file = image_file.replace('VG_100K', 'images')
-                    
+
                     image = Image.open(os.path.join(image_folder, image_file)).convert('RGB')
                     if self.data_args.image_aspect_ratio == 'pad':
                         def expand2square(pil_img, background_color):
@@ -864,22 +869,22 @@ class LazySupervisedDataset(Dataset):
                         print('File {} not exist!'.format(video_file))
                     vr = VideoReader(video_file, ctx=cpu(0))
                     sample_fps = round(vr.get_avg_fps()/self.data_args.video_fps)
-                    frame_idx = [i for i in range(0, len(vr), sample_fps)]
+                    frame_idx = list(range(0, len(vr), sample_fps))
                     video = vr.get_batch(frame_idx).asnumpy()
                     processor = self.data_args.image_processor
                     image = processor.preprocess(video, return_tensors='pt')['pixel_values']
                     sources = preprocess_multimodal(
                         copy.deepcopy([e["conversations"] for e in sources]),
-                        self.data_args)                    
+                        self.data_args)
                 else:
                     sources = copy.deepcopy([e["conversations"] for e in sources])
-                
+
                 break
             except:
                 attempt += 1
                 print(f"Error in loading {i}, retrying...")
                 i = random.randint(0, len(self.list_data_dict)-1)
-                
+
 
         has_image = ('image' in self.list_data_dict[i]) or ('video' in self.list_data_dict[i])
         data_dict = preprocess(
@@ -888,12 +893,8 @@ class LazySupervisedDataset(Dataset):
             has_image=has_image,
             prompt=self.data_args.input_prompt,
             refine_prompt=self.data_args.refine_prompt)
-        
-        if 'prompt' in data_dict:
-            prompt = data_dict['prompt']
-        else:
-            prompt = None
-        
+
+        prompt = data_dict['prompt'] if 'prompt' in data_dict else None
         if isinstance(i, int):
             data_dict = dict(input_ids=data_dict["input_ids"][0],
                              labels=data_dict["labels"][0])
@@ -907,11 +908,11 @@ class LazySupervisedDataset(Dataset):
             # image does not exist in the data, but the model is multimodal
             crop_size = self.data_args.image_processor.crop_size
             data_dict['image'] = torch.zeros(3, crop_size['height'], crop_size['width'])
-        
+
         # prompt exist in the data
         if prompt is not None:
             data_dict['prompt'] = prompt
-        
+
         return data_dict
 
 
@@ -1077,7 +1078,7 @@ def train():
             fsdp=training_args.fsdp,
             max_token=training_args.model_max_length
         )
-        
+
         vision_tower = model.get_vision_tower()
         vision_tower.to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
 
@@ -1144,7 +1145,7 @@ def train():
         non_lora_state_dict = get_peft_state_non_lora_maybe_zero_3(
             model.named_parameters()
         )
-        if training_args.local_rank == 0 or training_args.local_rank == -1:
+        if training_args.local_rank in [0, -1]:
             model.config.save_pretrained(training_args.output_dir)
             model.save_pretrained(training_args.output_dir, state_dict=state_dict)
             torch.save(non_lora_state_dict, os.path.join(training_args.output_dir, 'non_lora_trainables.bin'))

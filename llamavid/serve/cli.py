@@ -17,19 +17,18 @@ from transformers import TextStreamer
 
 
 def load_image(image_file):
-    if image_file.startswith('http') or image_file.startswith('https'):
-        response = requests.get(image_file)
-        image = Image.open(BytesIO(response.content)).convert('RGB')
-    else:
-        image = Image.open(image_file).convert('RGB')
-    return image
+    if not image_file.startswith('http') and not image_file.startswith(
+        'https'
+    ):
+        return Image.open(image_file).convert('RGB')
+    response = requests.get(image_file)
+    return Image.open(BytesIO(response.content)).convert('RGB')
 
 def load_video(video_path, fps=1):
     vr = VideoReader(video_path, ctx=cpu(0))
     fps = round(vr.get_avg_fps()/fps)
-    frame_idx = [i for i in range(0, len(vr), fps)]
-    spare_frames = vr.get_batch(frame_idx).asnumpy()
-    return spare_frames
+    frame_idx = list(range(0, len(vr), fps))
+    return vr.get_batch(frame_idx).asnumpy()
 
 def main(args):
     # Model
@@ -48,27 +47,24 @@ def main(args):
         conv_mode = "llava_v0"
 
     if args.conv_mode is not None and conv_mode != args.conv_mode:
-        print('[WARNING] the auto inferred conversation mode is {}, while `--conv-mode` is {}, using {}'.format(conv_mode, args.conv_mode, args.conv_mode))
+        print(
+            f'[WARNING] the auto inferred conversation mode is {conv_mode}, while `--conv-mode` is {args.conv_mode}, using {args.conv_mode}'
+        )
     else:
         args.conv_mode = conv_mode
 
     conv = conv_templates[args.conv_mode].copy()
-    if "mpt" in model_name.lower():
-        roles = ('user', 'assistant')
-    else:
-        roles = conv.roles
-
-    if args.image_file is not None:
-        if '.mp4' in args.image_file:
-            image = load_video(args.image_file)
-            image_tensor = image_processor.preprocess(image, return_tensors='pt')['pixel_values'].half().cuda()
-            image_tensor = [image_tensor]
-        else:
-            image = load_image(args.image_file)
-            image_tensor = image_processor.preprocess(image, return_tensors='pt')['pixel_values'].half().cuda()
-    else:
+    roles = ('user', 'assistant') if "mpt" in model_name.lower() else conv.roles
+    if args.image_file is None:
         image_tensor = None
-    
+
+    elif '.mp4' in args.image_file:
+        image = load_video(args.image_file)
+        image_tensor = image_processor.preprocess(image, return_tensors='pt')['pixel_values'].half().cuda()
+        image_tensor = [image_tensor]
+    else:
+        image = load_image(args.image_file)
+        image_tensor = image_processor.preprocess(image, return_tensors='pt')['pixel_values'].half().cuda()
     while True:
         try:
             inp = input(f"{roles[0]}: ")

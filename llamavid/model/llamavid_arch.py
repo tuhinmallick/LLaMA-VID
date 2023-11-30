@@ -74,7 +74,7 @@ class LLaMAVIDMetaModel:
         self.config.mm_vision_select_layer = mm_vision_select_layer
         self.config.mm_vision_select_feature = mm_vision_select_feature
         self.config.max_token = max_token
-        
+
         if getattr(self, 'mm_projector', None) is None:
             self.mm_projector = build_vision_projector(self.config)
         else:
@@ -85,7 +85,11 @@ class LLaMAVIDMetaModel:
         if pretrain_mm_mlp_adapter is not None:
             mm_projector_weights = torch.load(pretrain_mm_mlp_adapter, map_location='cpu')
             def get_w(weights, keyword):
-                return {k.split(keyword + '.')[1]: v for k, v in weights.items() if keyword in k}
+                return {
+                    k.split(f'{keyword}.')[1]: v
+                    for k, v in weights.items()
+                    if keyword in k
+                }
 
             self.mm_projector.load_state_dict(get_w(mm_projector_weights, 'mm_projector'))
 
@@ -112,13 +116,17 @@ class LLaMAVIDMetaModel:
             self.vlm_att_bert_proj = torch.nn.Linear(self.config.mm_hidden_size, att_feat_size)
         else:
             self.vlm_att_bert_proj = None
-        
+
         def get_w(weights, keyword):
-            return {k.split(keyword + '.')[1]: v for k, v in weights.items() if keyword in k}
-        
+            return {
+                k.split(f'{keyword}.')[1]: v
+                for k, v in weights.items()
+                if keyword in k
+            }
+
         if 'qformer_pretrain' in self.config.bert_type:
             self.vlm_att_ln = torch.nn.LayerNorm(att_feat_size)
-        
+
         if pretrain_qformer is not None:
             print("Loading pretrained qformer weights...")
             qformer_weight = torch.load(pretrain_qformer, map_location='cpu')['model']
@@ -126,26 +134,30 @@ class LLaMAVIDMetaModel:
             self.vlm_att_encoder.load_state_dict(get_w(bert_weight, 'Qformer'))
             self.vlm_att_ln.load_state_dict(get_w(qformer_weight, 'ln_vision'))
             self.vlm_att_query.data = qformer_weight['query_tokens']
-        
+
         if 'freeze' in self.config.bert_type:
             print("Freezing pretrained qformer weights...")
             self.vlm_att_encoder.requires_grad_(False)
             self.vlm_att_ln.requires_grad_(False)
             self.vlm_att_query.requires_grad_(False)
-        
+
         if pretrain_mm_mlp_adapter is not None or for_eval:
             if for_eval:
                 trainable_module = ['vlm_att_encoder', 'vlm_att_projector', 'vlm_att_key_projector', 
                                     'vlm_att_val_projector', 'vlm_att_query', 'vlm_att_visual_proj',
                                     'vlm_att_ln']
                 weight_file = json.load(open(os.path.join(model_args.model_path, 'pytorch_model.bin.index.json'), 'r'))['weight_map']
-                model_path = set([weight_file[_key] for _key in weight_file if any([_module in _key for _module in trainable_module])])
+                model_path = {
+                    weight_file[_key]
+                    for _key in weight_file
+                    if any(_module in _key for _module in trainable_module)
+                }
                 att_projector_weights = {}
                 for _model in model_path:
                     att_projector_weights.update(torch.load(os.path.join(model_args.model_path, _model), map_location='cpu'))
             else:
                 att_projector_weights = torch.load(pretrain_mm_mlp_adapter, map_location='cpu')
-            
+
             bert_dict = get_w(att_projector_weights, 'vlm_att_encoder')
             if "bert.embeddings.position_ids" not in bert_dict and "raw_bert" not in self.config.bert_type:
                 bert_dict["bert.embeddings.position_ids"] = self.vlm_att_encoder.bert.embeddings.position_ids
@@ -165,7 +177,7 @@ class LLaMAVIDMetaModel:
             if self.vlm_att_bert_proj is not None:
                 print('Loading vlm_att_bert_proj weights...')
                 self.vlm_att_bert_proj.load_state_dict(get_w(att_projector_weights, 'vlm_att_bert_proj'))
-            
+
             if for_eval:
                 weight_type = torch.float16
                 device_type = self.mm_projector[0].weight.device
@@ -178,7 +190,7 @@ class LLaMAVIDMetaModel:
                     self.vlm_att_query.data = self.vlm_att_query.data.to(device=device_type, dtype=weight_type)
                     if "pretrain" in self.config.bert_type:
                         self.vlm_att_ln = self.vlm_att_ln.to(device=device_type, dtype=weight_type)
-                
+
                 if self.vlm_att_bert_proj is not None:
                     self.vlm_att_bert_proj = self.vlm_att_bert_proj.to(device=device_type, dtype=weight_type)
             
@@ -327,8 +339,8 @@ class LLaMAVIDMetaForCausalLM(ABC):
     def token_generation(self, text_q, vis_embed):
         ctx_embed = self.get_model().vlm_att_key_projector(vis_embed)
         # Key part 1: calculate context-related embedding
-        ctx_embed = text_q @ ctx_embed.transpose(-1,-2) 
-        ctx_embed = ctx_embed / (vis_embed.shape[-1] ** 0.5) 
+        ctx_embed = text_q @ ctx_embed.transpose(-1,-2)
+        ctx_embed = ctx_embed / (vis_embed.shape[-1] ** 0.5)
         ctx_embed = (ctx_embed.softmax(-1) @ vis_embed).mean(1)
         ctx_embed = self.get_model().vlm_att_val_projector(ctx_embed[:,None])                   
 
@@ -344,15 +356,14 @@ class LLaMAVIDMetaForCausalLM(ABC):
                                          padding=0,
                                          kernel_size=grid_stride, 
                                          stride=grid_stride)
-                
+
                 vis_embed = vis_embed.permute(0, 2, 3, 1).flatten(1,2)
             elif 'mean' in self.config.compress_type:
                 vis_embed = vis_embed.mean(dim=1, keepdim=True)
-        
+
         # concat token in shape (B, n+1, C)
-        vis_embed = self.get_model().mm_projector(vis_embed)                
-        final_token = torch.cat([ctx_embed, vis_embed], dim=1)
-        return final_token
+        vis_embed = self.get_model().mm_projector(vis_embed)
+        return torch.cat([ctx_embed, vis_embed], dim=1)
 
     def update_prompt(self, prompts=None):
         self.prompts = prompts

@@ -194,13 +194,21 @@ class LLaVATrainer(Trainer):
                 optimizer_grouped_parameters = [
                     {
                         "params": [
-                            p for n, p in opt_model.named_parameters() if (n in decay_parameters and p.requires_grad and not any([_key in n for _key in lr_multi_dict.keys()]))
+                            p
+                            for n, p in opt_model.named_parameters()
+                            if n in decay_parameters
+                            and p.requires_grad
+                            and all(_key not in n for _key in lr_multi_dict.keys())
                         ],
                         "weight_decay": self.args.weight_decay,
                     },
                     {
                         "params": [
-                            p for n, p in opt_model.named_parameters() if (n not in decay_parameters and p.requires_grad and not any([_key in n for _key in lr_multi_dict.keys()]))
+                            p
+                            for n, p in opt_model.named_parameters()
+                            if n not in decay_parameters
+                            and p.requires_grad
+                            and all(_key not in n for _key in lr_multi_dict.keys())
                         ],
                         "weight_decay": 0.0,
                     },
@@ -212,7 +220,7 @@ class LLaVATrainer(Trainer):
                     _key_no_decay = [
                             p for n, p in opt_model.named_parameters() if (n not in decay_parameters and p.requires_grad and _key in n)
                         ]
-                    if len(_key_decay) > 0:
+                    if _key_decay:
                         optimizer_grouped_parameters.append(
                             {
                                 "params": _key_decay,
@@ -220,7 +228,7 @@ class LLaVATrainer(Trainer):
                                 "weight_decay": self.args.weight_decay,
                             },
                         )
-                    if len(_key_no_decay) > 0:
+                    if _key_no_decay:
                         optimizer_grouped_parameters.append(
                             {
                                 "params": _key_no_decay,
@@ -228,7 +236,7 @@ class LLaVATrainer(Trainer):
                                 "weight_decay": 0.0,
                             },
                         )
-                
+
             else:
                 optimizer_grouped_parameters = [
                     {
@@ -286,14 +294,12 @@ class LLaVATrainer(Trainer):
 
             weight_to_save = get_mm_adapter_state_maybe_zero_3(self.model.named_parameters(), keys_to_match)
 
-            if self.args.local_rank == 0 or self.args.local_rank == -1:
+            if self.args.local_rank in [0, -1]:
                 self.model.config.save_pretrained(output_dir)
-                torch.save(weight_to_save, os.path.join(output_dir, f'mm_projector.bin'))
+                torch.save(weight_to_save, os.path.join(output_dir, 'mm_projector.bin'))
         else:
             super(LLaVATrainer, self)._save_checkpoint(model, trial, metrics)
 
     def _save(self, output_dir: Optional[str] = None, state_dict=None):
-        if getattr(self.args, 'tune_mm_mlp_adapter', False):
-            pass
-        else:
+        if not getattr(self.args, 'tune_mm_mlp_adapter', False):
             super(LLaVATrainer, self)._save(output_dir, state_dict)

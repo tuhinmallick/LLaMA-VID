@@ -45,9 +45,7 @@ def process_files(csv_file, video_root):
             {'from': 'human', 'value': f'{instruct}\n<image>'},
             {'from': 'gpt', 'value': caption}
         ]
-        data_dict = {}
-        data_dict['id'] = videoid
-        data_dict['video'] = os.path.join(page_dir, video_file)
+        data_dict = {'id': videoid, 'video': os.path.join(page_dir, video_file)}
         data_dict['conversations'] = conv
         json_data.append(data_dict)
 
